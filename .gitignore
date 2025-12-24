@@ -1,0 +1,48 @@
+# 二进制文件
+md2word
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试输出
+test/*.docx
+test/output*
+*.docx
+!test/sample.md
+
+# Go 相关
+*.test
+*.out
+vendor/
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+*.log
+conversion.log
+
+# 临时文件
+*.tmp
+*.temp
+tmp/
+temp/
+
+# 构建目录
+dist/
+build/

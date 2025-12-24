@@ -1,0 +1,108 @@
+# MD2WORD 配置文件
+# 用于自定义 Markdown 转 DOCX 的各种样式和行为
+# 单位说明:
+# - 字号: pt (磅)
+# - 间距/行高: twips (1/20 磅), 例: 240 twips = 12pt = 1行(单倍行距)
+# - 颜色: Hex 格式, 如 "#FF0000"
+
+styles:
+  # 正文样式
+  body:
+    font: "宋体"
+    size: 10.5  # 10.5pt = 五号
+    # 段落设置
+    spaceBefore: 0       # 段前间距 (twips)
+    spaceAfter: 0        # 段后间距 (twips)
+    lineHeight: 360      # 行高 (twips): 240=单倍, 360=1.5倍
+    firstLineIndent: 420 # 首行缩进 (twips): 420=2字符(基于五号字)
+
+  # 标题样式 (1-9级)
+  heading1:
+    font: "黑体"
+    size: 16    # 16pt = 三号
+    bold: true
+    spaceBefore: 240 # 建议: 标题段前间距
+    spaceAfter: 120  # 建议: 标题段后间距
+
+  heading2:
+    font: "黑体"
+    size: 15    # 15pt = 小三
+    bold: true
+    spaceBefore: 200
+    spaceAfter: 100
+
+  heading3:
+    font: "黑体"
+    size: 15    # 15pt = 小三
+    bold: true
+    spaceBefore: 160
+    spaceAfter: 80
+
+  heading4:
+    font: "黑体"
+    size: 14    # 14pt = 四号
+    bold: true
+
+  heading5:
+    font: "黑体"
+    size: 14
+    bold: true
+
+  heading6:
+    font: "黑体"
+    size: 14
+    bold: true
+
+  heading7:
+    font: "黑体"
+    size: 14
+    bold: true
+
+  heading8:
+    font: "黑体"
+    size: 14
+    bold: true
+
+  heading9:
+    font: "黑体"
+    size: 14
+    bold: true
+
+  # 行内代码样式 (如 `code`)
+  code:
+    font: "Consolas"
+    size: 8
+    background: "#f5f5f5"
+    lineSpacing: 0
+    lineHeight: 240  # 单倍行距
+
+  # 代码块样式 (```block```)
+  codeBlock:
+    font: "Consolas"
+    size: 8
+    background: "#f5f5f5"
+    lineSpacing: 0   # 代码行之间的额外间距
+    lineHeight: 240  # 代码行高
+
+# 表格样式
+table:
+  font: "宋体"
+  size: 10.5
+  borders: true      # 是否显示边框
+  headerBold: true   # 表头是否加粗
+
+# Mermaid 流程图配置
+mermaid:
+  enabled: true
+  cli: "mmdc"        # 内部使用 chromedp 渲染，此字段暂保留
+  theme: "default"   # 主题: default, forest, dark, neutral
+
+# 数学公式配置
+math:
+  enabled: true
+  render: "image"    # 渲染模式: "image" (使用 MathJax 转图片)
+
+# 图片配置
+images:
+  maxWidth: 600       # 最大宽度 (像素), 超过将自动缩放
+  downloadTimeout: 30 # 网络图片下载超时 (秒)
