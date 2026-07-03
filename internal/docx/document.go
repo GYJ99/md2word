@@ -282,13 +282,13 @@ func (d *Document) writeDocument(w *zip.Writer) error {
 		buf.WriteString(elem.ToXML())
 	}
 
-	buf.WriteString(`
+	buf.WriteString(fmt.Sprintf(`
         <w:sectPr>
-            <w:pgSz w:w="11906" w:h="16838"/>
-            <w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/>
+            <w:pgSz w:w="%d" w:h="%d"/>
+            <w:pgMar w:top="%d" w:right="%d" w:bottom="%d" w:left="%d" w:header="851" w:footer="992" w:gutter="0"/>
         </w:sectPr>
     </w:body>
-</w:document>`)
+</w:document>`, PageWidthTwips, PageHeightTwips, MarginTop, MarginRight, MarginBottom, MarginLeft))
 
 	_, err = f.Write(buf.Bytes())
 	return err
@@ -309,4 +309,31 @@ func XMLEscape(s string) string {
 	var buf bytes.Buffer
 	xml.EscapeText(&buf, []byte(s))
 	return buf.String()
+}
+
+// Word 页面布局常量（twips，1 inch = 1440 twips，1 cm ≈ 567 twips）
+// 与 writeDocument 中 sectPr 的 pgSz/pgMar 保持一致。
+const (
+	PageWidthTwips  = 11906 // A4 宽度 ≈ 21cm
+	PageHeightTwips = 16838 // A4 高度 ≈ 29.7cm
+	MarginTop       = 1440  // 2.54cm
+	MarginBottom    = 1440
+	MarginLeft      = 1800  // 3.17cm
+	MarginRight     = 1800
+)
+
+// ContentWidthTwips 返回页面内容区可用宽度（页面宽度 - 左右边距）
+func ContentWidthTwips() int {
+	return PageWidthTwips - MarginLeft - MarginRight
+}
+
+// ContentWidthPx 把内容宽度换算为 96DPI 下的像素数。
+// 1 twip = 1/1440 inch，96 DPI 下 1 inch = 96 px，故 1 twip = 96/1440 px。
+func ContentWidthPx() int {
+	return ContentWidthTwips() * 96 / 1440
+}
+
+// ContentHeightPx 把内容区高度换算为 96DPI 下的像素数。
+func ContentHeightPx() int {
+	return (PageHeightTwips - MarginTop - MarginBottom) * 96 / 1440
 }

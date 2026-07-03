@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"md2word/internal/docx"
 )
 
 //go:embed mermaid.min.js
@@ -24,7 +25,9 @@ func RenderMermaidChromedp(code string, theme string) ([]byte, error) {
 	defer cancel()
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
-	return RenderMermaidWithContext(ctx, code, theme, 1200, 800, 2)
+	// 以 Word 内容区 96 DPI 像素宽度为画布参考，再交给 SVG scale 倍率放大到 2x 高清
+	width := docx.ContentWidthPx()
+	return RenderMermaidWithContext(ctx, code, theme, width, 900, 2)
 }
 
 func RenderMermaidWithContext(ctx context.Context, code string, theme string, width, height, scale int) ([]byte, error) {

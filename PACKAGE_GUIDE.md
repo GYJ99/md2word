@@ -1,126 +1,76 @@
-# md2word 跨平台编译指南
+# md2word 打包指南
 
-## 🎯 三个专用编译脚本
-
-### 1. 命令行版本跨平台编译
-```bash
-./scripts/package-cli.sh
-```
-**功能**: 本地跨平台编译，支持所有平台
-**输出**: `dist-cli/` 目录
-- ✅ Windows: `md2word-windows-amd64.exe` (15M)
-- ✅ Linux: `md2word-linux-amd64`, `md2word-linux-arm64` (15M/14M)
-- ✅ macOS: `md2word-darwin-amd64`, `md2word-darwin-arm64` (15M)
-- 📦 分发包: `.zip` (Windows) 和 `.tar.gz` (Unix)
-
-### 2. GUI 版本编译（当前平台）
-```bash
-./scripts/package-gui.sh
-```
-**功能**: 编译当前平台的 GUI 版本
-**输出**: `dist-gui/` 目录
-- ✅ 当前平台: `md2word-gui-{os}-{arch}` (30M)
-- 📦 分发包: `gui-{os}-{arch}.tar.gz` 或 `.zip`
-
-### 3. GUI 版本 Docker 编译（Linux）
-```bash
-./scripts/package-gui-docker.sh
-```
-**功能**: 使用 Docker 编译 Linux 版本的 GUI
-**输出**: `dist-gui-docker/` 目录
-- ✅ Linux ARM64: `md2word-gui-linux-arm64` (29M)
-- 📦 分发包: `gui-linux-arm64.tar.gz` (12M)
-
-**⚠️ GUI 版本限制**: 由于 Fyne 框架依赖 OpenGL 和平台特定的 C 库，GUI 版本无法进行完整跨平台编译。Docker 方案可以编译 Linux 版本，其他平台需要在目标平台上编译。
-
-## 🚀 快速使用
+## 一键打包（推荐）
 
 ```bash
-# 编译命令行版本（所有平台）
-./scripts/package-cli.sh
-
-# 编译 GUI 版本（当前平台）
-./scripts/package-gui.sh
-
-# 编译 GUI 版本（Docker Linux）
-./scripts/package-gui-docker.sh
-
-# 测试运行
-./dist-cli/md2word-darwin-arm64 --help
-./dist-gui/md2word-gui-darwin-arm64
-./dist-gui-docker/md2word-gui-linux-arm64
+./scripts/build.sh
 ```
 
-## 📁 输出结构
+脚本会自动：
+1. 检测当前操作系统和架构（`go env GOOS/GOARCH`）
+2. 编译 CLI（`CGO_ENABLED=0`，纯静态二进制）
+3. 编译 GUI（需 CGO，仅当前平台）
+4. 把版本号和构建时间注入二进制（`main.Version`、`main.BuildTime`）
+5. 生成分发包：Unix 用 `.tar.gz`，Windows 用 `.zip`
+
+## 输出结构
 
 ```
-dist-cli/           # 命令行版本（跨平台）
-├── md2word-windows-amd64.exe
-├── md2word-linux-amd64
-├── md2word-darwin-amd64
-└── *.tar.gz, *.zip
+dist-cli/
+├── md2word-darwin-arm64        # CLI 二进制
+└── darwin-arm64.tar.gz         # 分发包
 
-dist-gui/           # GUI 版本（当前平台）
-├── md2word-gui-darwin-arm64
-└── gui-darwin-arm64.tar.gz
-
-dist-gui-docker/    # GUI 版本（Docker Linux）
-├── md2word-gui-linux-arm64
-└── gui-linux-arm64.tar.gz
+dist-gui/
+├── md2word-gui-darwin-arm64    # GUI 二进制
+└── gui-darwin-arm64.tar.gz     # 分发包
 ```
 
-## 💡 多平台 GUI 编译
+文件名格式：`md2word[-gui]-{goos}-{goarch}[.exe]`
 
-如需其他平台的 GUI 版本，请在对应平台上运行：
+## 自定义版本号
 
 ```bash
-# Windows 上
-go build -o md2word-gui.exe ./cmd/md2word-gui
-
-# Linux 上
-go build -o md2word-gui ./cmd/md2word-gui
-
-# macOS 上
-go build -o md2word-gui ./cmd/md2word-gui
+VERSION=1.0.1 ./scripts/build.sh
 ```
 
-## 📋 脚本说明
+构建完成后，GUI 状态栏会显示注入的版本号：
+```
+v1.0.1                                    2026-07-03 18:21:30
+```
 
-| 脚本 | 功能 | 支持平台 | 输出目录 | 文件大小 |
-|------|------|----------|----------|----------|
-| `package-cli.sh` | 命令行版本编译 | 跨平台 | `dist-cli/` | 15M |
-| `package-gui.sh` | GUI 版本编译 | 当前平台 | `dist-gui/` | 30M |
-| `package-gui-docker.sh` | GUI Docker 编译 | Linux | `dist-gui-docker/` | 29M |
+## 跨平台说明
 
-## ✅ 测试结果
+| 类型 | 是否支持跨平台编译 | 原因 |
+|------|-------------------|------|
+| CLI  | ✅ 支持 | `CGO_ENABLED=0` 静态链接，无系统依赖 |
+| GUI  | ❌ 不支持 | Fyne 依赖 OpenGL 和平台特定的 C 库（GLFW、Cocoa、Win32） |
 
-### 命令行版本（跨平台编译成功）
-- ✅ Windows AMD64: 15M
-- ✅ Linux AMD64: 15M  
-- ✅ Linux ARM64: 14M
-- ✅ macOS AMD64: 15M
-- ✅ macOS ARM64: 15M
+如需 Windows/Linux GUI 版本：
+- 在对应平台上运行 `./scripts/build.sh`
+- 或在 CI 中按平台分别构建（`.github/workflows/build-gui.yml`）
 
-### GUI 版本（当前平台编译成功）
-- ✅ macOS ARM64: 30M
+## 手动编译
 
-### GUI 版本（Docker 编译成功）
-- ✅ Linux ARM64: 29M (使用 golang:latest 镜像)
+```bash
+# CLI（可指定 GOOS/GOARCH）
+CGO_ENABLED=0 GOOS=linux  GOARCH=amd64   go build -ldflags="-s -w" -o md2word         ./cmd/md2word
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64  go build -ldflags="-s -w" -o md2word.exe     ./cmd/md2word
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64  go build -ldflags="-s -w" -o md2word         ./cmd/md2word
 
-## 🔧 技术说明
+# GUI（必须 CGO_ENABLED=1 且与构建机平台一致）
+go build -ldflags="-s -w -X main.Version=1.0.0" -o md2word-gui ./cmd/md2word-gui
+```
 
-- **CLI 版本**: 使用 `CGO_ENABLED=0` 进行静态编译，支持完整跨平台编译
-- **GUI 版本**: 使用 Fyne 框架，依赖 CGO 和平台特定库
-  - 本地编译：仅支持当前平台编译
-  - Docker 编译：支持 Linux 版本编译，自动检测容器架构
-- **分发包**: 自动创建压缩包，Windows 使用 ZIP，Unix 系统使用 TAR.GZ
+`ldflags` 推荐使用 `-s -w` 去除调试信息，体积可减少约 30%。
 
-## 🐳 Docker 编译详情
+## 产物大小参考
 
-Docker GUI 编译脚本特性：
-- 自动尝试多个 Go 镜像（golang:latest, golang:1.24-alpine 等）
-- 自动检测容器架构并编译对应版本
-- 自动安装所需的 GUI 开发依赖
-- 支持 Alpine 和 Debian/Ubuntu 基础镜像
+| 平台 | CLI | GUI |
+|------|-----|-----|
+| macOS arm64 | ~15M | ~30M |
+| Linux amd64 | ~15M | ~30M |
+| Windows amd64 | ~15M | ~30M |
 
-简洁实用，专注编译！
+## CI/CD
+
+`.github/workflows/build-gui.yml` 在 main/develop 分支和 `v*` tag 触发，会同时构建 3 大平台（windows-latest / macos-latest / ubuntu-latest）的 CLI 和 GUI，并自动创建 GitHub Release。

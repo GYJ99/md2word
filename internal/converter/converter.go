@@ -488,7 +488,7 @@ func (c *Converter) processImage(node *ast.Image, p docx.RunContainer) {
 	width, height := c.getImageDimensions(data)
 
 	// 使用智能尺寸计算
-	displayW, displayH := c.calculateOptimalImageSize(width, height, false)
+	displayW, displayH := c.calculateOptimalImageSize(width, height)
 
 	rID := c.doc.AddImage(data, contentType, width, height)
 	// Word使用EMU单位: 1 pixel 约等于 9525 EMUs
@@ -496,63 +496,51 @@ func (c *Converter) processImage(node *ast.Image, p docx.RunContainer) {
 }
 
 // calculateOptimalImageSize 计算图片的最佳显示尺寸
-// 目标：适配Word页面宽度，保持高清，控制合理尺寸
-func (c *Converter) calculateOptimalImageSize(originalWidth, originalHeight int, isFlowchart bool) (displayWidth, displayHeight int) {
-	// Word A4页面可用宽度约为605像素（96DPI下）
-	// 但我们使用稍微保守的值以确保在不同页面设置下都能正常显示
-	maxPageWidth := 580 // 像素
-	
-	// 对于流程图，允许更大的宽度以保持清晰度
-	if isFlowchart {
-		maxPageWidth = 650
-	}
-	
-	// 设置最小和最大尺寸限制
-	minWidth := 100
-	maxHeight := 800 // 避免图片过高
-	
+// 目标：适配 Word 页面可用宽度（页面宽度 - 左右边距，由 docx.ContentWidthPx 提供），保持高清。
+func (c *Converter) calculateOptimalImageSize(originalWidth, originalHeight int) (displayWidth, displayHeight int) {
+	const (
+		minWidth  = 100
+		maxHeight = 800
+	)
+	maxPageWidth := docx.ContentWidthPx()
+
 	displayWidth = originalWidth
 	displayHeight = originalHeight
-	
-	// 对于高分辨率图片（如2倍缩放的流程图），先缩小到合理尺寸
-	if isFlowchart && originalWidth > 1000 {
-		// 流程图通常是高分辨率渲染的，需要缩小到合适的显示尺寸
-		scale := 0.6 // 缩小到60%
-		displayWidth = int(float64(originalWidth) * scale)
-		displayHeight = int(float64(originalHeight) * scale)
-	}
-	
-	// 如果图片太小，适当放大（但不超过原始尺寸的2倍）
+
+	// 图片太小则适当放大（不超过原始尺寸的 2 倍）
 	if displayWidth < minWidth && displayWidth > 0 {
 		scale := float64(minWidth) / float64(displayWidth)
-		if scale <= 2.0 { // 最多放大2倍
+		if scale <= 2.0 {
 			displayWidth = int(float64(displayWidth) * scale)
 			displayHeight = int(float64(displayHeight) * scale)
 		}
 	}
-	
-	// 如果宽度超过页面宽度，按比例缩小
+
+	// 宽度硬夹到页面可用宽度——这一步强制保证不溢出
 	if displayWidth > maxPageWidth {
 		ratio := float64(maxPageWidth) / float64(displayWidth)
 		displayWidth = maxPageWidth
 		displayHeight = int(float64(displayHeight) * ratio)
 	}
-	
-	// 如果高度过高，按比例缩小
+
+	// 高度过高则按比例缩小
 	if displayHeight > maxHeight {
 		ratio := float64(maxHeight) / float64(displayHeight)
 		displayHeight = maxHeight
 		displayWidth = int(float64(displayWidth) * ratio)
+		// 再次夹宽度，避免高度缩小后宽度反弹超出页面
+		if displayWidth > maxPageWidth {
+			displayWidth = maxPageWidth
+		}
 	}
-	
-	// 确保尺寸不为0
+
 	if displayWidth <= 0 {
 		displayWidth = minWidth
 	}
 	if displayHeight <= 0 {
-		displayHeight = int(float64(displayWidth) * 0.75) // 默认4:3比例
+		displayHeight = int(float64(displayWidth) * 0.75)
 	}
-	
+
 	return displayWidth, displayHeight
 }
 
@@ -816,9 +804,9 @@ func (c *Converter) processMermaid(node *ast.FencedCodeBlock) error {
 	}
 
 	width, height := c.getImageDimensions(imgData)
-	
-	// 使用智能尺寸计算，流程图标记为true
-	displayW, displayH := c.calculateOptimalImageSize(width, height, true)
+
+	// 使用智能尺寸计算
+	displayW, displayH := c.calculateOptimalImageSize(width, height)
 
 	rID := c.doc.AddImage(imgData, "image/png", width, height)
 	p := docx.NewParagraph("")
