@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -102,6 +103,49 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// LoadConfigWithFallback 按优先级解析配置：
+//  1. customPath 非空：直接加载该文件
+//  2. 当前目录下的 config.yaml
+//  3. 可执行文件所在目录下的 config.yaml
+//  4. 内嵌默认配置
+//
+// 返回最终使用的配置，以及来源描述（用于日志展示）。
+func LoadConfigWithFallback(customPath string) (*Config, string, error) {
+	candidates := make([]string, 0, 3)
+	if customPath != "" {
+		candidates = append(candidates, customPath)
+	}
+	if _, err := os.Stat("config.yaml"); err == nil {
+		candidates = append(candidates, "config.yaml")
+	}
+	if exePath, err := os.Executable(); err == nil {
+		installPath := filepath.Join(filepath.Dir(exePath), "config.yaml")
+		if installPath != customPath {
+			if _, err := os.Stat(installPath); err == nil {
+				candidates = append(candidates, installPath)
+			}
+		}
+	}
+
+	used := "内置默认配置"
+	for _, p := range candidates {
+		cfg, err := LoadConfig(p)
+		if err != nil {
+			return nil, "", fmt.Errorf("加载配置 %s 失败: %w", p, err)
+		}
+		if p == customPath {
+			used = fmt.Sprintf("自定义配置: %s", p)
+		} else if p == "config.yaml" {
+			used = "./config.yaml (当前目录)"
+		} else {
+			used = fmt.Sprintf("%s (可执行文件目录)", p)
+		}
+		return cfg, used, nil
+	}
+
+	return DefaultConfig(), used, nil
 }
 
 // GetHeadingStyle 获取标题样式

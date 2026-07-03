@@ -8,6 +8,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // MarkdownParser Markdown解析器
@@ -27,6 +28,15 @@ func NewMarkdownParser() *MarkdownParser {
 		),
 		goldmark.WithParserOptions(
 			parser.WithAutoHeadingID(),
+			// 注册支持 1-9 级的 ATX Heading 解析器（默认仅支持 1-6 级）。
+			// 与默认 parser 同优先级 (600)：默认 parser 先处理 1-6 级并返回节点后即终止；
+			// 7-9 级由本解析器接管。
+			parser.WithBlockParsers(
+				util.Prioritized(
+					NewDeepATXHeadingParser(parser.WithAutoHeadingID()),
+					600,
+				),
+			),
 		),
 	)
 	return &MarkdownParser{md: md}

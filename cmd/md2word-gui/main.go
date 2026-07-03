@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"os"
@@ -18,6 +19,12 @@ import (
 
 	"md2word/internal/config"
 	"md2word/internal/converter"
+)
+
+// 由 -ldflags "-X main.Version=... -X main.BuildTime=..." 注入
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
 )
 
 type App struct {
@@ -298,7 +305,7 @@ func (a *App) createStatusBar() *fyne.Container {
 		}
 	}()
 	
-	versionLabel := widget.NewLabel("v1.0.0")
+	versionLabel := widget.NewLabel("v" + Version)
 	
 	return container.NewBorder(
 		nil, nil,
@@ -308,22 +315,37 @@ func (a *App) createStatusBar() *fyne.Container {
 }
 
 func (a *App) setupDragAndDrop() {
-	// 这里可以添加拖拽支持的代码
-	// Fyne 的拖拽支持可能需要额外的实现
+	// TODO: Fyne 的拖拽需要实现 desktop.Draggable 接口或监听 window 的 drop 事件
+	// 当前版本未启用文件拖拽功能，用户请通过 "浏览" 按钮选择文件
 }
 
 func (a *App) setupShortcuts() {
 	// Ctrl+O 打开文件
-	a.window.Canvas().AddShortcut(&fyne.ShortcutCut{}, func(shortcut fyne.Shortcut) {
+	a.window.Canvas().AddShortcut(&keyShortcut{key: fyne.KeyO, mod: fyne.KeyModifierShortcutDefault}, func(_ fyne.Shortcut) {
 		a.selectInputFile()
 	})
-	
+
 	// Ctrl+S 开始转换
-	a.window.Canvas().AddShortcut(&fyne.ShortcutPaste{}, func(shortcut fyne.Shortcut) {
+	a.window.Canvas().AddShortcut(&keyShortcut{key: fyne.KeyS, mod: fyne.KeyModifierShortcutDefault}, func(_ fyne.Shortcut) {
 		if a.convertBtn.Visible() {
 			a.handleConvert()
 		}
 	})
+}
+
+// keyShortcut 通用键盘快捷键，可指定键名和修饰键。
+type keyShortcut struct {
+	key fyne.KeyName
+	mod fyne.KeyModifier
+}
+
+func (s *keyShortcut) Key() fyne.KeyName  { return s.key }
+func (s *keyShortcut) Mod() fyne.KeyModifier { return s.mod }
+func (s *keyShortcut) ShortcutName() string {
+	if s.mod == 0 {
+		return "Custom:" + string(s.key)
+	}
+	return "Custom:Mod+" + string(s.key)
 }
 
 func (a *App) selectInputFile() {
@@ -414,7 +436,7 @@ func (a *App) handleConvert() {
 	}
 	
 	// 检查输入文件是否存在
-	if _, err := os.Stat(a.inputPath.Text); os.IsNotExist(err) {
+	if _, err := os.Stat(a.inputPath.Text); errors.Is(err, os.ErrNotExist) {
 		a.showError("输入文件不存在: " + a.inputPath.Text)
 		return
 	}
@@ -462,21 +484,13 @@ func (a *App) startConversion() {
 func (a *App) performConversion() error {
 	a.progressBar.SetValue(0.1)
 	a.appendLog("📋 加载配置...")
-	
-	// 加载配置
-	var cfg *config.Config
-	var err error
-	
-	if a.configPath.Text != "" {
-		cfg, err = config.LoadConfig(a.configPath.Text)
-		if err != nil {
-			return fmt.Errorf("加载配置文件失败: %w", err)
-		}
-		a.appendLog("⚙️ 使用自定义配置: " + filepath.Base(a.configPath.Text))
-	} else {
-		cfg = config.DefaultConfig()
-		a.appendLog("⚙️ 使用默认配置")
+
+	// 加载配置：用户指定 > ./config.yaml > $EXE_DIR/config.yaml > 内置默认
+	cfg, source, err := config.LoadConfigWithFallback(a.configPath.Text)
+	if err != nil {
+		return err
 	}
+	a.appendLog("⚙️  " + source)
 	
 	a.progressBar.SetValue(0.3)
 	a.appendLog("📖 读取输入文件...")

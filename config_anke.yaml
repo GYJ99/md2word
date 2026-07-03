@@ -96,7 +96,7 @@ mermaid:
   enabled: true
   cli: "mmdc" # 内部使用 chromedp 渲染，此字段暂保留
   theme: "default" # 主题: default, forest, dark, neutral
-  width: 1200 # 渲染宽度 (像素) - 提高清晰度
+  width: 1000 # 渲染宽度 (像素) - 提高清晰度
   height: 900 # 渲染高度 (像素) - 提高清晰度
   scale: 2 # 渲染缩放倍数，2倍提高清晰度
 

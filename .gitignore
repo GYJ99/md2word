@@ -1,5 +1,10 @@
 # 二进制文件
-md2word
+# md2word
+md2word-new
+md2word-gui
+md2word-gui-new
+md2word-*
+!md2word-*.go
 *.exe
 *.exe~
 *.dll
@@ -12,11 +17,18 @@ test/output*
 *.docx
 !test/sample.md
 test.txt
+.~*.docx
 
 # Go 相关
 *.test
 *.out
 vendor/
+
+# 备份文件
+*.bak
+*.backup
+*.tmp
+*.temp
 
 # IDE 和编辑器
 .idea/
@@ -39,11 +51,15 @@ Thumbs.db
 conversion.log
 
 # 临时文件
-*.tmp
-*.temp
 tmp/
 temp/
 
 # 构建目录
 dist/
 build/
+
+# 备份配置
+*.go.bak
+*.go.backup
+go.mod.backup
+go.sum.backup
