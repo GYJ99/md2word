@@ -33,6 +33,7 @@ type Paragraph struct {
 	HorizontalRule  bool   // 是否是分隔线
 	LineHeight      int    // 行高 (twips)
 	FirstLineIndent int    // 首行缩进 (twips)
+	NumberingXML    string // 编号属性XML
 }
 
 // Run 文本运行
@@ -158,12 +159,17 @@ func (p *Paragraph) ToXML() string {
         <w:p>`)
 
 	// 段落属性
-	if p.StyleID != "" || p.Align != "" || p.Indent > 0 || p.SpacingB > 0 || p.SpacingA > 0 || p.Shading != "" || p.Border || p.HorizontalRule || p.LineHeight > 0 || p.FirstLineIndent > 0 {
+	if p.StyleID != "" || p.Align != "" || p.Indent > 0 || p.SpacingB > 0 || p.SpacingA > 0 || p.Shading != "" || p.Border || p.HorizontalRule || p.LineHeight > 0 || p.FirstLineIndent > 0 || p.NumberingXML != "" {
 		buf.WriteString(`
             <w:pPr>`)
 		if p.StyleID != "" {
 			buf.WriteString(`
                 <w:pStyle w:val="` + p.StyleID + `"/>`)
+		}
+		// 编号属性(必须在其他属性之前)
+		if p.NumberingXML != "" {
+			buf.WriteString(`
+                ` + p.NumberingXML)
 		}
 		if p.Align != "" {
 			jc := p.Align
@@ -175,9 +181,20 @@ func (p *Paragraph) ToXML() string {
 			buf.WriteString(`
                 <w:jc w:val="` + jc + `"/>`)
 		}
-		if p.Indent > 0 || p.FirstLineIndent > 0 {
-			buf.WriteString(fmt.Sprintf(`
+		if p.Indent > 0 || p.FirstLineIndent != 0 {
+			if p.FirstLineIndent < 0 {
+				// 悬挂缩进:使用hanging属性(负值转正)
+				buf.WriteString(fmt.Sprintf(`
+                <w:ind w:left="%d" w:hanging="%d"/>`, p.Indent, -p.FirstLineIndent))
+			} else if p.FirstLineIndent > 0 {
+				// 首行缩进
+				buf.WriteString(fmt.Sprintf(`
                 <w:ind w:left="%d" w:firstLine="%d"/>`, p.Indent, p.FirstLineIndent))
+			} else {
+				// 仅左缩进
+				buf.WriteString(fmt.Sprintf(`
+                <w:ind w:left="%d"/>`, p.Indent))
+			}
 		}
 		if p.SpacingB > 0 || p.SpacingA > 0 || p.LineHeight > 0 {
 			line := 360

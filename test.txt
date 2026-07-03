@@ -1,10 +1,5 @@
 
-
-
 go build -o md2word ./cmd/md2word
 go install ./cmd/md2word
 
-
-./md2word -i test/sample.md -o test/output.docx
-
-md2word -i test/sample.md -o test/output.docx
+md2word -i test/comprehensive_test.md -o test/comprehensive_test.docx

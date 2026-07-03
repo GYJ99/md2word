@@ -19,12 +19,13 @@ type Element interface {
 
 // Document DOCX文档
 type Document struct {
-	config      *config.Config
-	elements    []Element
-	images      map[string]*ImageData
-	imageCount  int
-	rels        []Relationship
-	contentRels []Relationship
+	config         *config.Config
+	elements       []Element
+	images         map[string]*ImageData
+	imageCount     int
+	rels           []Relationship
+	contentRels    []Relationship
+	numberingState *NumberingState
 }
 
 // ImageData 图片数据
@@ -46,10 +47,11 @@ type Relationship struct {
 // NewDocument 创建新文档
 func NewDocument(cfg *config.Config) *Document {
 	return &Document{
-		config:   cfg,
-		elements: make([]Element, 0),
-		images:   make(map[string]*ImageData),
-		rels:     make([]Relationship, 0),
+		config:         cfg,
+		elements:       make([]Element, 0),
+		images:         make(map[string]*ImageData),
+		rels:           make([]Relationship, 0),
+		numberingState: NewNumberingState(),
 	}
 }
 
@@ -105,6 +107,11 @@ func (d *Document) AddHyperlink(target string) string {
 	return rID
 }
 
+// GetNumberingState 获取编号状态
+func (d *Document) GetNumberingState() *NumberingState {
+	return d.numberingState
+}
+
 // Save 保存为DOCX文件
 func (d *Document) Save(path string) error {
 	// 确保目录存在
@@ -143,6 +150,11 @@ func (d *Document) Save(path string) error {
 		return err
 	}
 
+	// 写入word/numbering.xml
+	if err := d.writeNumbering(w); err != nil {
+		return err
+	}
+
 	// 写入word/document.xml
 	if err := d.writeDocument(w); err != nil {
 		return err
@@ -175,6 +187,7 @@ func (d *Document) writeContentTypes(w *zip.Writer) error {
     <Default Extension="gif" ContentType="image/gif"/>
     <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
     <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+    <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 </Types>`
 	_, err = io.WriteString(f, content)
 	return err
@@ -205,7 +218,8 @@ func (d *Document) writeDocumentRels(w *zip.Writer) error {
 	var buf bytes.Buffer
 	buf.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`)
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+    <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`)
 
 	for _, rel := range d.contentRels {
 		if rel.TargetMode != "" {
@@ -233,6 +247,18 @@ func (d *Document) writeStyles(w *zip.Writer) error {
 
 	styles := GenerateStyles(d.config)
 	_, err = io.WriteString(f, styles)
+	return err
+}
+
+// writeNumbering 写入编号定义
+func (d *Document) writeNumbering(w *zip.Writer) error {
+	f, err := w.Create("word/numbering.xml")
+	if err != nil {
+		return err
+	}
+
+	numbering := GenerateNumberingXML(d.numberingState.GetNumberingInstances())
+	_, err = io.WriteString(f, numbering)
 	return err
 }
 

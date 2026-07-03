@@ -96,6 +96,9 @@ mermaid:
   enabled: true
   cli: "mmdc"        # 内部使用 chromedp 渲染，此字段暂保留
   theme: "default"   # 主题: default, forest, dark, neutral
+  width: 800         # 渲染宽度 (像素) - 适中尺寸保证兼容性
+  height: 600        # 渲染高度 (像素)
+  scale: 1           # 渲染缩放倍数，1倍避免超时问题
 
 # 数学公式配置
 math:
@@ -104,5 +107,5 @@ math:
 
 # 图片配置
 images:
-  maxWidth: 600       # 最大宽度 (像素), 超过将自动缩放
+  maxWidth: 650       # 最大宽度 (像素), 适配Word页面宽度
   downloadTimeout: 30 # 网络图片下载超时 (秒)

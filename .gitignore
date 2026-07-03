@@ -11,6 +11,7 @@ test/*.docx
 test/output*
 *.docx
 !test/sample.md
+test.txt
 
 # Go 相关
 *.test

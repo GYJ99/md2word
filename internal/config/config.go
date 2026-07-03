@@ -39,6 +39,9 @@ type MermaidConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	CLI     string `yaml:"cli"`
 	Theme   string `yaml:"theme"`
+	Width   int    `yaml:"width"`  // 渲染宽度
+	Height  int    `yaml:"height"` // 渲染高度
+	Scale   int    `yaml:"scale"`  // 渲染缩放倍数
 }
 
 // MathConfig 数学公式配置

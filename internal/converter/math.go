@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // RenderMathJax 使用MathJax渲染LaTeX公式为图片
@@ -78,23 +79,102 @@ func renderMathJaxLocal(latex string, display bool) ([]byte, error) {
 
 // renderMathJaxOnline 使用在线服务渲染
 func renderMathJaxOnline(latex string, display bool) ([]byte, error) {
-	// 使用 latex.codecogs.com 服务
-	// URL格式: https://latex.codecogs.com/png.latex?{latex}
+	// 首先尝试 latex.codecogs.com 服务
+	// 注意：不要使用 url.QueryEscape，因为它会将空格编码为+，导致与LaTeX的+号混淆
+	// 手动编码特殊字符
+	encodedLatex := strings.ReplaceAll(latex, " ", "%20")
+	encodedLatex = strings.ReplaceAll(encodedLatex, "+", "%2B")
+	encodedLatex = strings.ReplaceAll(encodedLatex, "=", "%3D")
+	encodedLatex = strings.ReplaceAll(encodedLatex, "{", "%7B")
+	encodedLatex = strings.ReplaceAll(encodedLatex, "}", "%7D")
+	encodedLatex = strings.ReplaceAll(encodedLatex, "^", "%5E")
+	encodedLatex = strings.ReplaceAll(encodedLatex, "\\", "%5C")
+	encodedLatex = strings.ReplaceAll(encodedLatex, "\n", "%0A")
+	
+	// 提高DPI以获得更清晰的图片
+	dpi := "200"
+	if display {
+		dpi = "300" // 块级公式使用更高DPI
+	}
+	
+	apiURL := fmt.Sprintf("https://latex.codecogs.com/png.latex?\\dpi{%s}%s", dpi, encodedLatex)
 
-	encodedLatex := url.QueryEscape(latex)
-	apiURL := fmt.Sprintf("https://latex.codecogs.com/png.latex?\\dpi{150}%s", encodedLatex)
-
-	resp, err := http.Get(apiURL)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(apiURL)
 	if err != nil {
-		return nil, fmt.Errorf("math render request failed: %w", err)
+		// 备用方案：使用 quicklatex.com
+		return renderMathQuickLatex(latex, display)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("math render failed with status: %d", resp.StatusCode)
+		// 备用方案：使用 quicklatex.com
+		return renderMathQuickLatex(latex, display)
 	}
 
-	return io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return renderMathQuickLatex(latex, display)
+	}
+
+	// 检查返回的数据是否是有效的图片
+	if len(data) < 100 { // 太小可能是错误信息
+		return renderMathQuickLatex(latex, display)
+	}
+
+	return data, nil
+}
+
+// renderMathQuickLatex 使用 quicklatex.com 作为备用方案
+func renderMathQuickLatex(latex string, display bool) ([]byte, error) {
+	// QuickLaTeX API
+	formData := url.Values{}
+	formData.Set("formula", latex)
+	formData.Set("fsize", "14px") // 字体大小
+	formData.Set("fcolor", "000000") // 黑色
+	formData.Set("mode", "0") // 0=inline, 1=display
+	if display {
+		formData.Set("mode", "1")
+	}
+	formData.Set("out", "1") // PNG输出
+	formData.Set("remhost", "quicklatex.com")
+	
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.PostForm("https://quicklatex.com/latex3.f", formData)
+	if err != nil {
+		return nil, fmt.Errorf("quicklatex request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("quicklatex failed with status: %d", resp.StatusCode)
+	}
+
+	// QuickLaTeX 返回的是文本响应，包含图片URL
+	responseText, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(string(responseText), "\n")
+	if len(lines) < 2 || !strings.HasPrefix(lines[0], "0") {
+		return nil, fmt.Errorf("quicklatex error: %s", string(responseText))
+	}
+
+	// 第二行是图片URL
+	imgURL := strings.TrimSpace(lines[1])
+	if imgURL == "" {
+		return nil, fmt.Errorf("no image URL returned")
+	}
+
+	// 下载图片
+	imgResp, err := client.Get(imgURL)
+	if err != nil {
+		return nil, err
+	}
+	defer imgResp.Body.Close()
+
+	return io.ReadAll(imgResp.Body)
 }
 
 // convertSVGtoPNG 将SVG转换为PNG

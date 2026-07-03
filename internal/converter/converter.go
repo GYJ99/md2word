@@ -39,6 +39,9 @@ type Converter struct {
 	// Chromedp 资源
 	chromeCtx    context.Context
 	chromeCancel context.CancelFunc
+
+	// 编号状态跟踪
+	numberingState *docx.NumberingState
 }
 
 // Element 文档元素接口
@@ -49,9 +52,10 @@ type Element interface {
 // NewConverter 创建新的转换器
 func NewConverter(cfg *config.Config) *Converter {
 	return &Converter{
-		config:   cfg,
-		parser:   parser.NewMarkdownParser(),
-		elements: make([]Element, 0),
+		config:         cfg,
+		parser:         parser.NewMarkdownParser(),
+		elements:       make([]Element, 0),
+		numberingState: docx.NewNumberingState(),
 	}
 }
 
@@ -169,10 +173,63 @@ func (c *Converter) processHeading(node *ast.Heading) error {
 	p := docx.NewParagraph(styleID)
 	p.LineHeight = c.config.Styles.Body.LineHeight
 
-	c.processInlineNodes(node, p)
-	c.doc.AddParagraph(p)
+	// 提取标题文本 - 修复文本提取逻辑
+	var headingText strings.Builder
+	c.extractTextFromNode(node, &headingText)
 
+	// 解析标题中的编号
+	originalText := headingText.String()
+	parsedNum := docx.ParseHeadingNumber(originalText)
+
+	if parsedNum != nil {
+		// 找到了编号，设置Word自动编号
+		// 获取或创建编号实例
+		numState := c.doc.GetNumberingState()
+		instance := numState.GetOrCreateNumberingInstance(parsedNum)
+		
+		if instance != nil {
+			// 计算Word的编号级别 (0-based)
+			ilvl := parsedNum.Level - 1
+			if ilvl < 0 {
+				ilvl = 0
+			}
+			if ilvl > 8 {
+				ilvl = 8
+			}
+
+			// 设置段落的编号属性
+			p.NumberingXML = docx.GetNumberingXMLForParagraph(ilvl, instance.NumId)
+		}
+
+		// 使用移除编号后的标题文本
+		cleanRun := p.AddRun(parsedNum.Text)
+		cleanRun.Bold = c.config.GetHeadingStyle(level).Bold
+
+		// 更新编号状态
+		numState.UpdateNumberingState(parsedNum)
+	} else {
+		// 没有编号，正常处理内联节点
+		c.processInlineNodes(node, p)
+	}
+
+	c.doc.AddParagraph(p)
 	return nil
+}
+
+// extractTextFromNode 递归提取节点中的所有文本
+func (c *Converter) extractTextFromNode(node ast.Node, builder *strings.Builder) {
+	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+		switch n := child.(type) {
+		case *ast.Text:
+			builder.WriteString(string(n.Segment.Value(c.source)))
+		case *ast.Emphasis:
+			// 处理加粗/斜体标记，继续提取内部文本
+			c.extractTextFromNode(n, builder)
+		default:
+			// 递归处理其他节点
+			c.extractTextFromNode(n, builder)
+		}
+	}
 }
 
 // processParagraph 处理段落
@@ -185,8 +242,15 @@ func (c *Converter) processParagraph(node *ast.Paragraph) error {
 	p.LineHeight = c.config.Styles.Body.LineHeight
 	p.FirstLineIndent = c.config.Styles.Body.FirstLineIndent
 
-	// 处理内联节点
-	c.processInlineNodes(node, p)
+	// 首先检查段落是否包含数学公式
+	paragraphText := c.extractParagraphText(node)
+	if strings.Contains(paragraphText, "$") {
+		// 包含公式，使用特殊处理
+		c.processParagraphWithFormulas(node, p)
+	} else {
+		// 不包含公式，正常处理内联节点
+		c.processInlineNodes(node, p)
+	}
 
 	// 如果段落有内容（子元素），则添加到文档
 	if len(p.Children) > 0 {
@@ -194,6 +258,124 @@ func (c *Converter) processParagraph(node *ast.Paragraph) error {
 	}
 
 	return nil
+}
+
+// extractParagraphText 提取段落的完整文本内容
+func (c *Converter) extractParagraphText(node ast.Node) string {
+	var builder strings.Builder
+	c.extractTextFromNode(node, &builder)
+	return builder.String()
+}
+
+// processParagraphWithFormulas 处理包含公式的段落
+func (c *Converter) processParagraphWithFormulas(node ast.Node, p *docx.Paragraph) {
+	// 获取段落的完整文本
+	fullText := c.extractParagraphText(node)
+	
+	// 解析公式位置
+	formulas := c.parseInlineFormulas(fullText)
+	
+	if len(formulas) == 0 {
+		// 没有找到公式，正常处理
+		c.processInlineNodes(node, p)
+		return
+	}
+	
+	// 按位置处理文本和公式
+	lastEnd := 0
+	for _, formula := range formulas {
+		// 添加公式前的文本
+		if formula.Start > lastEnd {
+			beforeText := fullText[lastEnd:formula.Start]
+			if beforeText != "" {
+				p.AddRun(beforeText)
+			}
+		}
+		
+		// 处理公式
+		imgData, err := RenderMathJax(formula.Formula, false)
+		if err == nil && len(imgData) > 0 {
+			width, height := c.getImageDimensions(imgData)
+			if width > 0 && height > 0 {
+				// 计算适合的显示尺寸
+				displayW, displayH := c.calculateFormulaSize(width, height, true) // true表示行内公式
+				
+				rID := c.doc.AddImage(imgData, "image/png", width, height)
+				p.AddImageRun(rID, int64(displayW)*9525, int64(displayH)*9525)
+			} else {
+				// 尺寸异常，作为文本处理
+				p.AddRun("$" + formula.Formula + "$")
+			}
+		} else {
+			// 渲染失败，作为文本处理
+			p.AddRun("$" + formula.Formula + "$")
+		}
+		
+		lastEnd = formula.End
+	}
+	
+	// 添加剩余的文本
+	if lastEnd < len(fullText) {
+		remainingText := fullText[lastEnd:]
+		if remainingText != "" {
+			p.AddRun(remainingText)
+		}
+	}
+}
+
+// FormulaInfo 公式信息
+type FormulaInfo struct {
+	Start   int
+	End     int
+	Formula string
+}
+
+// parseInlineFormulas 解析行内公式
+func (c *Converter) parseInlineFormulas(text string) []FormulaInfo {
+	var formulas []FormulaInfo
+	start := 0
+	
+	for {
+		idx := strings.Index(text[start:], "$")
+		if idx == -1 {
+			break
+		}
+		
+		absIdx := start + idx
+		
+		// 检查是否是转义的 $
+		if absIdx > 0 && text[absIdx-1] == '\\' {
+			start = absIdx + 1
+			continue
+		}
+		
+		// 检查是否是块级公式 $$
+		if absIdx+1 < len(text) && text[absIdx+1] == '$' {
+			start = absIdx + 2
+			continue
+		}
+		
+		// 查找结束的 $
+		endIdx := strings.Index(text[absIdx+1:], "$")
+		if endIdx == -1 {
+			break
+		}
+		
+		absEndIdx := absIdx + 1 + endIdx
+		formula := strings.TrimSpace(text[absIdx+1 : absEndIdx])
+		
+		if formula != "" {
+			formulas = append(formulas, FormulaInfo{
+				Start:   absIdx,
+				End:     absEndIdx + 1,
+				Formula: formula,
+			})
+		}
+		
+		start = absEndIdx + 1
+	}
+	
+	return formulas
 }
 
 // processTextBlock 处理文本块
@@ -231,7 +413,11 @@ func (c *Converter) processInlineNode(n ast.Node, p docx.RunContainer, bold, ita
 				run.Color = strings.TrimPrefix(c.config.Styles.Code.Color, "#")
 			}
 		} else {
-			c.processTextWithInlineFormulas(text, p, bold, italic, strike)
+			// 对于普通文本，直接添加（公式已在段落级别处理）
+			run := p.AddRun(text)
+			run.Bold = bold
+			run.Italic = italic
+			run.Strike = strike
 		}
 	case *ast.Emphasis:
 		level := node.Level
@@ -244,35 +430,10 @@ func (c *Converter) processInlineNode(n ast.Node, p docx.RunContainer, bold, ita
 		}
 	case *ast.Link:
 		url := string(node.Destination)
-		// 如果 p 是 Paragraph，则可以添加超链接
 		if para, ok := p.(*docx.Paragraph); ok {
 			rID := c.doc.AddHyperlink(url)
 			link := para.AddHyperlink(rID)
-			// 超链接内的文本通常由 Word 自动样式化，如果需要强制样式（如蓝色下划线），可以在这里传递 bold/italic 等
-			// 但通常让 Word 处理即可，或者我们手动应用 "Hyperlink" 样式
-			// 这里我们继续递归处理子节点，将它们添加到 link 中
 			for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-				// 将子节点添加进 link (link 也是 RunContainer)
-				// 注意：Word 超链接内默认不自动变蓝，需要我们手动设置 Run 属性
-				// 我们创建一个带默认超链接样式的 helper? 或者直接在 processTextWithInlineFormulas 里判断?
-				// 既然我们控制 Run，我们就手动设置颜色和下划线
-				// 我们需要一个 flag 告诉 processInlineNode "这是在链接里" 吗？
-				// 上下文 p 变成了 link，我们可以针对 link 容器的所有新增 Run 设置样式
-				// 但 RunContainer 接口没有 "SetStyle" 方法。
-				// 简单办法：在添加完 Run 后，手动修改 Run 属性?
-				// 这里的 processInlineNode 会调用 AddRun。
-				// 我们可以在调用 processInlineNode 之前，或者之后?
-				// 最好是 processInlineNode 里面的 AddRun 返回 run，然后我们无法拦截。
-				// 解决方案：Hyperlink.AddRun 实现中可以默认给 Run 设置样式！
-				// 或者：我们在 Hyperlink 结构体中添加 AddRun 实现时就加上样式。
-				// 让我们修改 paragraph.go 中的 Hyperlink.AddRun 吗？
-				// 或者在这里递归调用时，我们可以不用 processInlineNode，而是自己写循环？
-				// 不，为了支持加粗斜体等嵌套，必须复用 processInlineNode。
-				// 那么我们如何让 link 中的 run 变蓝？
-				// 我们可以修改 Hyperlink.AddRun/AddFormattedRun 来默认应用样式。
-				// 但这需要修改 paragraph.go。
-				// 也可以：遍历 link.Runs 并修改。但 processInlineNode 不返回 runs。
-				// 我们可以让 link.Runs 在处理完子节点后遍历修改。
 				c.processInlineNode(child, link, bold, italic, code, strike)
 			}
 			// 处理完所有子节点后，统一给 link 的 Runs 加上超链接样式
@@ -288,7 +449,6 @@ func (c *Converter) processInlineNode(n ast.Node, p docx.RunContainer, bold, ita
 				c.processInlineNode(child, p, bold, italic, code, strike)
 			}
 		}
-
 	case *ast.Image:
 		c.processImage(node, p)
 	case *east.Strikethrough:
@@ -298,57 +458,7 @@ func (c *Converter) processInlineNode(n ast.Node, p docx.RunContainer, bold, ita
 	}
 }
 
-// processTextWithInlineFormulas 处理包含行内公式的文本
-func (c *Converter) processTextWithInlineFormulas(text string, p docx.RunContainer, bold, italic, strike bool) {
-	start := 0
-	for {
-		idx := strings.Index(text[start:], "$")
-		if idx == -1 {
-			break
-		}
 
-		absIdx := start + idx
-		if absIdx > 0 && text[absIdx-1] == '\\' {
-			run := p.AddRun(text[start:absIdx-1] + "$")
-			run.Bold = bold
-			run.Italic = italic
-			start = absIdx + 1
-			continue
-		}
-
-		endIdx := strings.Index(text[absIdx+1:], "$")
-		if endIdx == -1 {
-			break
-		}
-
-		absEndIdx := absIdx + 1 + endIdx
-		if absIdx > start {
-			run := p.AddRun(text[start:absIdx])
-			run.Bold = bold
-			run.Italic = italic
-		}
-
-		formula := text[absIdx+1 : absEndIdx]
-		imgData, err := RenderMathJax(formula, false)
-		if err == nil {
-			width, height := c.getImageDimensions(imgData)
-			rID := c.doc.AddImage(imgData, "image/png", width, height)
-			p.AddImageRun(rID, int64(width)*9525, int64(height)*9525)
-		} else {
-			run := p.AddRun("$" + formula + "$")
-			run.Bold = bold
-			run.Italic = italic
-		}
-
-		start = absEndIdx + 1
-	}
-
-	if start < len(text) {
-		run := p.AddRun(text[start:])
-		run.Bold = bold
-		run.Italic = italic
-	}
-}
 
 // processImage 处理图片
 func (c *Converter) processImage(node *ast.Image, p docx.RunContainer) {
@@ -377,21 +487,163 @@ func (c *Converter) processImage(node *ast.Image, p docx.RunContainer) {
 
 	width, height := c.getImageDimensions(data)
 
-	// 计算显示宽度（Word 使用 EMU，1英寸=914400 EMU，A4页宽约6.5英寸=5943600 EMU）
-	// 这里我们使用配置文件中的 MaxWidth (默认为 600px)
-	displayW := width
-	displayH := height
-
-	maxWidth := c.config.Images.MaxWidth
-	if displayW > maxWidth {
-		ratio := float64(maxWidth) / float64(displayW)
-		displayW = maxWidth
-		displayH = int(float64(displayH) * ratio)
-	}
+	// 使用智能尺寸计算
+	displayW, displayH := c.calculateOptimalImageSize(width, height, false)
 
 	rID := c.doc.AddImage(data, contentType, width, height)
 	// Word使用EMU单位: 1 pixel 约等于 9525 EMUs
 	p.AddImageRun(rID, int64(displayW)*9525, int64(displayH)*9525)
+}
+
+// calculateOptimalImageSize 计算图片的最佳显示尺寸
+// 目标：适配Word页面宽度，保持高清，控制合理尺寸
+func (c *Converter) calculateOptimalImageSize(originalWidth, originalHeight int, isFlowchart bool) (displayWidth, displayHeight int) {
+	// Word A4页面可用宽度约为605像素（96DPI下）
+	// 但我们使用稍微保守的值以确保在不同页面设置下都能正常显示
+	maxPageWidth := 580 // 像素
+	
+	// 对于流程图，允许更大的宽度以保持清晰度
+	if isFlowchart {
+		maxPageWidth = 650
+	}
+	
+	// 设置最小和最大尺寸限制
+	minWidth := 100
+	maxHeight := 800 // 避免图片过高
+	
+	displayWidth = originalWidth
+	displayHeight = originalHeight
+	
+	// 对于高分辨率图片（如2倍缩放的流程图），先缩小到合理尺寸
+	if isFlowchart && originalWidth > 1000 {
+		// 流程图通常是高分辨率渲染的，需要缩小到合适的显示尺寸
+		scale := 0.6 // 缩小到60%
+		displayWidth = int(float64(originalWidth) * scale)
+		displayHeight = int(float64(originalHeight) * scale)
+	}
+	
+	// 如果图片太小，适当放大（但不超过原始尺寸的2倍）
+	if displayWidth < minWidth && displayWidth > 0 {
+		scale := float64(minWidth) / float64(displayWidth)
+		if scale <= 2.0 { // 最多放大2倍
+			displayWidth = int(float64(displayWidth) * scale)
+			displayHeight = int(float64(displayHeight) * scale)
+		}
+	}
+	
+	// 如果宽度超过页面宽度，按比例缩小
+	if displayWidth > maxPageWidth {
+		ratio := float64(maxPageWidth) / float64(displayWidth)
+		displayWidth = maxPageWidth
+		displayHeight = int(float64(displayHeight) * ratio)
+	}
+	
+	// 如果高度过高，按比例缩小
+	if displayHeight > maxHeight {
+		ratio := float64(maxHeight) / float64(displayHeight)
+		displayHeight = maxHeight
+		displayWidth = int(float64(displayWidth) * ratio)
+	}
+	
+	// 确保尺寸不为0
+	if displayWidth <= 0 {
+		displayWidth = minWidth
+	}
+	if displayHeight <= 0 {
+		displayHeight = int(float64(displayWidth) * 0.75) // 默认4:3比例
+	}
+	
+	return displayWidth, displayHeight
+}
+
+// calculateFormulaSize 计算数学公式的最佳显示尺寸
+func (c *Converter) calculateFormulaSize(originalWidth, originalHeight int, isInline bool) (displayWidth, displayHeight int) {
+	displayWidth = originalWidth
+	displayHeight = originalHeight
+	
+	if isInline {
+		// 行内公式的限制
+		maxInlineWidth := 350   // 行内公式最大宽度（像素）- 适配正常文本行
+		maxInlineHeight := 18   // 行内公式最大高度（像素）- 匹配文本行高
+		
+		// 首先检查高度，确保不超过行高
+		if displayHeight > maxInlineHeight {
+			ratio := float64(maxInlineHeight) / float64(displayHeight)
+			displayWidth = int(float64(displayWidth) * ratio)
+			displayHeight = maxInlineHeight
+		}
+		
+		// 然后检查宽度，确保不超过合理范围
+		if displayWidth > maxInlineWidth {
+			ratio := float64(maxInlineWidth) / float64(displayWidth)
+			displayWidth = maxInlineWidth
+			displayHeight = int(float64(displayHeight) * ratio)
+			
+			// 如果缩小后高度太小，适当调整
+			if displayHeight < 12 {
+				displayHeight = 12
+				displayWidth = int(float64(originalWidth) * float64(displayHeight) / float64(originalHeight))
+				if displayWidth > maxInlineWidth {
+					displayWidth = maxInlineWidth
+				}
+			}
+		}
+	} else {
+		// 块级公式的限制
+		maxBlockWidth := 380    // 块级公式最大宽度（像素）- 适中尺寸，确保两侧有充足留白
+		maxBlockHeight := 220   // 块级公式最大高度（像素）- 适中高度，避免过高
+		
+		// 对于原始尺寸较小的公式，不要过度放大
+		if originalWidth < 200 && originalHeight < 100 {
+			// 小公式保持相对原始尺寸，但限制最大值
+			maxSmallWidth := int(float64(maxBlockWidth) * 0.7) // 小公式最多占70%宽度
+			if displayWidth > maxSmallWidth {
+				ratio := float64(maxSmallWidth) / float64(displayWidth)
+				displayWidth = maxSmallWidth
+				displayHeight = int(float64(displayHeight) * ratio)
+			}
+		} else {
+			// 大公式按正常规则缩放
+			if displayWidth > maxBlockWidth {
+				ratio := float64(maxBlockWidth) / float64(displayWidth)
+				displayWidth = maxBlockWidth
+				displayHeight = int(float64(displayHeight) * ratio)
+			}
+		}
+		
+		// 检查高度
+		if displayHeight > maxBlockHeight {
+			ratio := float64(maxBlockHeight) / float64(displayHeight)
+			displayHeight = maxBlockHeight
+			displayWidth = int(float64(displayWidth) * ratio)
+		}
+		
+		// 确保块级公式有合理的最小尺寸
+		if displayWidth < 60 {
+			displayWidth = 60
+		}
+		if displayHeight < 20 {
+			displayHeight = 20
+		}
+	}
+	
+	// 确保尺寸不为0
+	if displayWidth <= 0 {
+		if isInline {
+			displayWidth = 30
+		} else {
+			displayWidth = 50
+		}
+	}
+	if displayHeight <= 0 {
+		if isInline {
+			displayHeight = 15
+		} else {
+			displayHeight = 20
+		}
+	}
+	
+	return displayWidth, displayHeight
 }
 
 func (c *Converter) downloadImage(url string) ([]byte, string, error) {
@@ -551,7 +803,7 @@ func (c *Converter) processMermaid(node *ast.FencedCodeBlock) error {
 		return fmt.Errorf("启动浏览器失败: %w", err)
 	}
 
-	imgData, err := RenderMermaidWithContext(ctx, mermaidCode, c.config.Mermaid.Theme)
+	imgData, err := RenderMermaidWithContext(ctx, mermaidCode, c.config.Mermaid.Theme, c.config.Mermaid.Width, c.config.Mermaid.Height, c.config.Mermaid.Scale)
 	if err != nil {
 		fmt.Printf("Mermaid 渲染错误: %v\n", err)
 		p := docx.NewParagraph("")
@@ -564,16 +816,14 @@ func (c *Converter) processMermaid(node *ast.FencedCodeBlock) error {
 	}
 
 	width, height := c.getImageDimensions(imgData)
-	if width > c.config.Images.MaxWidth {
-		ratio := float64(c.config.Images.MaxWidth) / float64(width)
-		width = c.config.Images.MaxWidth
-		height = int(float64(height) * ratio)
-	}
+	
+	// 使用智能尺寸计算，流程图标记为true
+	displayW, displayH := c.calculateOptimalImageSize(width, height, true)
 
 	rID := c.doc.AddImage(imgData, "image/png", width, height)
 	p := docx.NewParagraph("")
 	p.Align = "center"
-	p.AddImageRun(rID, int64(width)*9525, int64(height)*9525)
+	p.AddImageRun(rID, int64(displayW)*9525, int64(displayH)*9525)
 	c.doc.AddParagraph(p)
 	return nil
 }
@@ -594,12 +844,16 @@ func (c *Converter) renderMathAsImage(latex string, display bool) error {
 		return err
 	}
 	width, height := c.getImageDimensions(imgData)
+	
+	// 计算适合的显示尺寸
+	displayW, displayH := c.calculateFormulaSize(width, height, false) // false表示块级公式
+	
 	rID := c.doc.AddImage(imgData, "image/png", width, height)
 	p := docx.NewParagraph("")
 	if display {
 		p.Align = "center"
 	}
-	p.AddImageRun(rID, int64(width)*9525, int64(height)*9525)
+	p.AddImageRun(rID, int64(displayW)*9525, int64(displayH)*9525)
 	c.doc.AddParagraph(p)
 	return nil
 }
@@ -618,21 +872,41 @@ func (c *Converter) processList(node *ast.List, level int) error {
 
 func (c *Converter) processListItem(node *ast.ListItem, isOrdered bool, index int, level int) {
 	p := docx.NewParagraph("")
-	p.Indent = (level + 1) * 360
+
+	// 使用首行缩进(不是悬挂缩进):
+	// - 内容顶格(左缩进=0)
+	// - 序号向右移动360 twips
+	// 结果:序号行在360位置(有缩进),内容换行后在0位置(顶格)
+	p.Indent = 0
+	p.FirstLineIndent = 360 // 序号缩进
+
 	p.LineHeight = c.config.Styles.Body.LineHeight
 	if isOrdered {
 		p.AddRun(fmt.Sprintf("%d. ", index)).Bold = true
 	} else {
 		p.AddRun("• ").Bold = true
 	}
+
+	// 收集嵌套列表,稍后处理
+	var nestedLists []*ast.List
+
+	// 先处理内联内容
 	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
 		if list, ok := child.(*ast.List); ok {
-			c.processList(list, level+1)
+			// 保存嵌套列表,稍后处理
+			nestedLists = append(nestedLists, list)
 			continue
 		}
 		c.processInlineNodes(child, p)
 	}
+
+	// 先添加当前段落
 	c.doc.AddParagraph(p)
+
+	// 再处理嵌套列表(在当前段落之后)
+	for _, list := range nestedLists {
+		c.processList(list, level+1)
+	}
 }
 
 func (c *Converter) processBlockquote(node *ast.Blockquote) error {

@@ -1,0 +1,14 @@
+[Details]
+Icon = "assets/icon.png"
+Name = "md2word"
+ID = "com.md2word.app"
+Version = "1.0.0"
+
+[Development]
+AutoInject = true
+DeveloperID = ""
+Category = ""
+
+[Metadata]
+Developer = "md2word Team"
+Website = "https://github.com/GYJ99/md2word"
